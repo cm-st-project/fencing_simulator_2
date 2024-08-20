@@ -111,6 +111,3 @@ While not explicitly mentioned before, the `landmarks.json` file plays a crucial
 - **Pygame**: For enabling the creation of an intuitive graphical interface.
 - **OpenCV**: For handling video processing and integration.
 
----
-
-This README should provide a thorough understanding of FencingDynamics, its features, and how to get started. Let me know if there are any other details you'd like to include!
