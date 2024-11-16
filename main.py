@@ -16,6 +16,8 @@ screen_width = 1200
 screen_height = 600
 screen = pygame.display.set_mode((screen_width, screen_height))
 pygame.display.set_caption("FencingDynamics")
+center_x_character = 0
+center_y_character = 0
 
 # Set up the clock for frame rate
 clock = pygame.time.Clock()
@@ -39,33 +41,123 @@ def calculate_person_height(landmarks_px):
 
 
 # Function to normalize landmarks to a default height and apply an offset
-def normalize_landmarks(landmarks_px, default_height, start_x, start_y):
+def normalize_landmarks(landmarks_px, default_height, position, has_calculate_center=True,
+                        is_realtime=False):
     person_height = calculate_person_height(landmarks_px)
     scale_factor = default_height / person_height
+    start_x = get_start_x(has_calculate_center, is_realtime, landmarks_px, position, scale_factor)
+    start_y = get_start_y(has_calculate_center, landmarks_px, scale_factor)
+    for i in range(len(landmarks_px)):
+        landmarks_px[i] = (
+            int(landmarks_px[i][0] * scale_factor) + start_x, int(landmarks_px[i][1] * scale_factor) + start_y)
+        # print(landmarks_px[i][0] * scale_factor)
+    return landmarks_px
 
-    return [(int(x * scale_factor) + start_x, int(y * scale_factor) + start_y) for x, y in landmarks_px]
+    # return [(int(x * scale_factor) + start_x, int(y * scale_factor) + start_y) for x, y in landmarks_px]
+
+
+def get_start_x(has_calculate_center, is_realtime, landmarks_px, position, scale_factor):
+    global center_x_character
+    center_x = 0
+    if not is_realtime:
+        if not has_calculate_center:
+            # calculate center x of the body (between the shoulders)
+            center_x_character = (landmarks_px[11][0] * scale_factor + landmarks_px[12][0] * scale_factor) // 2
+        center_x = center_x_character
+        print(center_x)
+    # Normalize position based on side of the screen
+    if position == 'right':
+        start_x = 200 - center_x  # position for the character on the left
+        # Flip the x-coordinates for the real-time pose
+    else:
+        start_x = screen_width - 400 - center_x  # Example for the opponent character on the right
+    return start_x
+
+
+def get_start_y(calculate_center, landmarks_px, scale_factor, is_realtime=False):
+    global center_y_character
+    if calculate_center:
+        # calculate center x of the body (between the shoulder and hip)
+        center_y_character = (landmarks_px[11][1] * scale_factor + landmarks_px[23][1] * scale_factor) // 2
+        print(center_y_character)
+
+    if is_realtime:
+        center_y = landmarks_px[11][1] * scale_factor + landmarks_px[23][1] * scale_factor
+        start_y = screen_height // 2 - center_y_character - center_y
+    else:
+        start_y = screen_height // 2 - center_y_character
+
+    return start_y
 
 
 # Function to draw pose lines
-def draw_pose_lines(screen, landmarks, head_image, start_x=0, start_y=0):
+def draw_pose_lines(screen, landmarks, head_image, position, has_calculated_center,
+                    is_realtime=False):
+    global center_x_character
     if landmarks:
         # Convert normalized coordinates to pixel coordinates
         landmarks_px = [(int(landmark['x'] * screen_width), int(landmark['y'] * screen_height)) for landmark in
                         landmarks]
+        center_x = 0
+        if is_realtime:
+            landmarks_px = [(screen_width - x, y) for x, y in landmarks_px]
 
         # Normalize the landmarks to a default height (e.g., 300 pixels) and apply the starting position offset
-        default_height = 200
-        landmarks_px = normalize_landmarks(landmarks_px, default_height, start_x, start_y)
+        default_height = 150
+        landmarks_px = normalize_landmarks(landmarks_px, default_height, position,
+                                           has_calculate_center=has_calculated_center, is_realtime=is_realtime)
 
         drawBody(landmarks_px, screen)
         drawHead(head_image, landmarks_px, screen)
-        drawSaber(landmarks_px, screen)
+
+        return landmarks_px
+    return None
 
 
-def drawSaber(landmarks_px, screen):
-    # Draw the saber
-    if len(landmarks_px) > 14:  # Ensure wrist landmarks are available
-        right_wrist = np.array(landmarks_px[16])
+def draw_score_panel(screen, score_left, score_right):
+    """
+    Draws a score panel at the top of the screen showing the scores for both players.
+
+    Parameters:
+    - screen: Pygame display surface.
+    - score_left: Integer score for the left player.
+    - score_right: Integer score for the right player.
+    """
+    font = pygame.font.Font(None, 36)
+    panel_height = 100
+    # yellow color
+    panel_color = (255, 255, 0)
+    start_x = screen_width // 2 - 100
+    panel_width = 300
+
+    # Draw the panel background
+    pygame.draw.rect(screen, panel_color, (start_x, screen_height - panel_height, panel_width, panel_height))
+
+    # Draw scores for both players
+    score_left_text = font.render(f"Left: {score_left}", True, (0, 0, 0))
+    score_right_text = font.render(f"Right: {score_right}", True, (0, 0, 0))
+
+    # Position the scores
+    screen.blit(score_left_text, (screen_width // 2 - 50, screen_height - panel_height // 2))  # Left score position
+    screen.blit(score_right_text, (screen_width // 2 + 50, screen_height - panel_height // 2))  # Right score position
+
+
+def drawSaber(landmarks_px, screen, opponent_landmarks_px, score, opponent_side):
+    """
+    Draw the saber and check for collisions with the opponent's body.
+
+    Parameters:
+    - landmarks_px: Current player's landmarks.
+    - screen: Pygame display surface.
+    - opponent_landmarks_px: Opponent's landmarks.
+    - score: Current score dictionary.
+    - opponent_side: The side of the opponent ('left' or 'right').
+
+    Returns:
+    - Updated score if a collision is detected.
+    """
+    if len(landmarks_px) > 16:  # Ensure wrist landmarks are available
+        right_wrist = np.array(landmarks_px[16])  # Right wrist of the player holding the saber
         right_elbow = np.array(landmarks_px[14])
         right_shoulder = np.array(landmarks_px[12])
 
@@ -74,12 +166,24 @@ def drawSaber(landmarks_px, screen):
         delta_x = right_elbow[0] - right_shoulder[0]
         angle = np.arctan2(delta_y, delta_x)  # Angle in radians
 
-        # Draw a line extending from the right wrist to simulate the saber
+        # Saber tip position
         saber_length = 100
         saber_end_x = right_wrist[0] + saber_length * np.cos(angle)
         saber_end_y = right_wrist[1] - saber_length * np.sin(angle)
-        saber_end = (int(saber_end_x), int(saber_end_y))
-        pygame.draw.line(screen, (0, 0, 0), right_wrist, saber_end, 4)  # Black color and thickness of 4
+        saber_tip = (int(saber_end_x), int(saber_end_y))
+
+        # Draw the saber
+        pygame.draw.line(screen, (0, 0, 0), right_wrist, saber_tip, 4)  # Black saber
+
+        # Check for collision with opponent landmarks
+        for opp_landmark in opponent_landmarks_px:
+            opp_x, opp_y = opp_landmark
+            distance = np.sqrt((saber_tip[0] - opp_x) ** 2 + (saber_tip[1] - opp_y) ** 2)
+            if distance < 15:  # Collision threshold (adjust if necessary)
+                score[opponent_side] += 1
+                break  # Avoid multiple points for the same frame
+
+    return score
 
 
 def drawHead(head_image, landmarks_px, screen):
@@ -240,15 +344,16 @@ def pose_estimation_screen(video_name):
 
     # Initialize video capture
     cap = cv2.VideoCapture(0)  # Open the default camera
-
     back_button_color, back_button_rect, back_button_text = define_back_button_simulation_screen()
-
+    has_calculated_center = False
     frame_index = 0
     num_frames = len(landmarks)
 
     # Define size for the smaller video frame
     video_frame_width = screen_width // 5
     video_frame_height = screen_height // 5
+
+    score = {'left': 0, 'right': 0}
 
     while frame_index < num_frames:
         for event in pygame.event.get():
@@ -272,6 +377,9 @@ def pose_estimation_screen(video_name):
         # Get the frame dimensions
         frame_resized = cv2.resize(frame, (video_frame_width, video_frame_height))
 
+        # flip the frame horizontally
+        frame_resized = cv2.flip(frame_resized, 1)
+
         # Convert resized frame to RGB (OpenCV uses BGR by default)
         frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
         frame_surface = pygame.surfarray.make_surface(np.transpose(frame_rgb, (1, 0, 2)))
@@ -283,19 +391,35 @@ def pose_estimation_screen(video_name):
         # Draw the painted background
         draw_painted_background(screen)
 
-
-
         # Display the video frame
         screen.blit(frame_surface, (screen_width - video_frame_width - 10, 10))  # Top-right corner
 
         if frame_index < num_frames:
+
             frame_landmarks = landmarks[frame_index]
             # Draw the pre-recorded pose lines, head image, and saber on the left side
-            draw_pose_lines(screen, frame_landmarks, head_image, start_x=300, start_y=0)
+            opponent_landmarks_px = draw_pose_lines(screen, frame_landmarks, head_image, position,
+                                               has_calculated_center, is_realtime=False)
             frame_index += 1
-            # Draw the real-time pose lines, head image, and saber
-            draw_pose_lines(screen, realtime_landmarks, realtime_head_image, start_x=100, start_y=100)
+            if opponent_landmarks_px is None:
+                continue
 
+            has_calculated_center = True
+
+            # Draw the real-time pose lines, head image, and saber
+            landmarks_px = draw_pose_lines(screen, realtime_landmarks, realtime_head_image, opposite_position,
+                                           False, is_realtime=True)
+            if landmarks_px is None:
+                continue
+            # print(score)
+            # Draw the opponent's saber and check for collisions
+            score = drawSaber(landmarks_px, screen, opponent_landmarks_px, score,
+                              'left' if position == 'right' else 'right')
+            # Draw the saber and check for collisions
+            score = drawSaber(opponent_landmarks_px, screen, landmarks_px, score,
+                              'left' if opposite_position == 'right' else 'right')
+            # Draw the score panel
+            draw_score_panel(screen, score['left'], score['right'])
         # Draw the back button
         pygame.draw.rect(screen, back_button_color, back_button_rect)
         screen.blit(back_button_text, (back_button_rect.x + 10, back_button_rect.y + 5))
