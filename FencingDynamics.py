@@ -1,4 +1,6 @@
 import json
+import os
+import sys
 from pathlib import Path
 
 import cv2
@@ -8,6 +10,17 @@ import pygame
 
 from video_processor import extract_landmarks
 
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
 # Initialize Pygame
 pygame.init()
 
@@ -16,6 +29,9 @@ screen_width = 1200
 screen_height = 600
 screen = pygame.display.set_mode((screen_width, screen_height))
 pygame.display.set_caption("FencingDynamics")
+# Load and set the window icon
+icon_image = pygame.image.load(resource_path('images/logo.png'))
+pygame.display.set_icon(icon_image)
 center_x_character = 0
 center_y_character = 0
 
@@ -26,9 +42,12 @@ mp_pose = mp.solutions.pose
 pose = mp_pose.Pose()
 mp_drawing = mp.solutions.drawing_utils
 
+
+
 # Load JSON file with landmarks
-with open('landmarks.json', 'r') as f:
+with open(resource_path('fencing_landmarks/landmarks.json'), 'r') as f:
     landmarks_data = json.load(f)
+
 
 
 # Function to calculate the height of the person based on specific landmarks
@@ -64,7 +83,7 @@ def get_start_x(has_calculate_center, is_realtime, landmarks_px, position, scale
             # calculate center x of the body (between the shoulders)
             center_x_character = (landmarks_px[11][0] * scale_factor + landmarks_px[12][0] * scale_factor) // 2
         center_x = center_x_character
-        print(center_x)
+        # print(center_x)
     # Normalize position based on side of the screen
     if position == 'right':
         start_x = 200 - center_x  # position for the character on the left
@@ -79,7 +98,7 @@ def get_start_y(calculate_center, landmarks_px, scale_factor, is_realtime=False)
     if calculate_center:
         # calculate center x of the body (between the shoulder and hip)
         center_y_character = (landmarks_px[11][1] * scale_factor + landmarks_px[23][1] * scale_factor) // 2
-        print(center_y_character)
+        # print(center_y_character)
 
     if is_realtime:
         center_y = landmarks_px[11][1] * scale_factor + landmarks_px[23][1] * scale_factor
@@ -281,7 +300,7 @@ def main_menu():
 
 
 def display_logo_name_main(font):
-    logo_image = pygame.image.load('logo.png')  # Load your app logo
+    logo_image = pygame.image.load(resource_path('images/logo.png'))  # Load your app logo
     logo_image = pygame.transform.scale(logo_image, (150, 150))  # Resize to desired dimensions
     # Display the app name and logo
     app_name_surface = font.render('FencingDynamics', True, (0, 0, 0))
@@ -331,104 +350,83 @@ def draw_scroll_bar_main(container_height, container_y, scroll_y, scrollbar_widt
 
 
 def pose_estimation_screen(video_name):
+    print("Entering pose_estimation_screen")
     landmarks = landmarks_data[video_name]
     position = Path(video_name).stem.split('_')[-1]
-    # Load head image based on the position
-    head_image = pygame.image.load(f'head-{position}.png')
-    head_image = pygame.transform.scale(head_image, (50, 50))  # Resize to desired dimensions
+    head_image = pygame.image.load(resource_path(f'images/head-{position}.png'))
+    head_image = pygame.transform.scale(head_image, (50, 50))
     opposite_position = 'left' if position == 'right' else 'right'
-    # Load the real-time head image
-    realtime_head_image = pygame.image.load(f'head-{opposite_position}.png')
-    # Resize the real-time head image to match the pre-recorded head image size
+    realtime_head_image = pygame.image.load(resource_path(f'images/head-{opposite_position}.png'))
     realtime_head_image = pygame.transform.scale(realtime_head_image, head_image.get_size())
 
-    # Initialize video capture
-    cap = cv2.VideoCapture(0)  # Open the default camera
+    cap = cv2.VideoCapture(0)
     back_button_color, back_button_rect, back_button_text = define_back_button_simulation_screen()
     has_calculated_center = False
     frame_index = 0
     num_frames = len(landmarks)
 
-    # Define size for the smaller video frame
     video_frame_width = screen_width // 5
     video_frame_height = screen_height // 5
-
     score = {'left': 0, 'right': 0}
 
-    while frame_index < num_frames:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                cap.release()
-                return
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                cap.release()
-                return
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if back_button_rect.collidepoint(pygame.mouse.get_pos()):
-                    cap.release()
+    try:
+        while frame_index < num_frames:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    print("Quitting pose_estimation_screen")
                     return
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    print("Exiting pose_estimation_screen via ESC")
+                    return
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if back_button_rect.collidepoint(pygame.mouse.get_pos()):
+                        print("Back button pressed")
+                        return
 
-        # Capture frame-by-frame
-        ret, frame = cap.read()
-        if not ret:
-            break
+            ret, frame = cap.read()
+            if not ret:
+                print("Camera frame not captured")
+                break
 
-        # Get the frame dimensions
-        frame_resized = cv2.resize(frame, (video_frame_width, video_frame_height))
+            frame_resized = cv2.resize(frame, (video_frame_width, video_frame_height))
+            frame_resized = cv2.flip(frame_resized, 1)
+            frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+            frame_surface = pygame.surfarray.make_surface(np.transpose(frame_rgb, (1, 0, 2)))
 
-        # flip the frame horizontally
-        frame_resized = cv2.flip(frame_resized, 1)
+            results = pose.process(frame)
+            realtime_landmarks = extract_landmarks(results)
 
-        # Convert resized frame to RGB (OpenCV uses BGR by default)
-        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
-        frame_surface = pygame.surfarray.make_surface(np.transpose(frame_rgb, (1, 0, 2)))
+            draw_painted_background(screen)
+            screen.blit(frame_surface, (screen_width - video_frame_width - 10, 10))
 
-        # Process the frame for real-time pose estimation
-        results = pose.process(frame)
-        realtime_landmarks = extract_landmarks(results)
+            if frame_index < num_frames:
+                frame_landmarks = landmarks[frame_index]
+                opponent_landmarks_px = draw_pose_lines(screen, frame_landmarks, head_image, position,
+                                                        has_calculated_center, is_realtime=False)
+                frame_index += 1
+                if opponent_landmarks_px is None:
+                    continue
 
-        # Draw the painted background
-        draw_painted_background(screen)
+                has_calculated_center = True
+                landmarks_px = draw_pose_lines(screen, realtime_landmarks, realtime_head_image, opposite_position,
+                                               False, is_realtime=True)
+                if landmarks_px is None:
+                    continue
 
-        # Display the video frame
-        screen.blit(frame_surface, (screen_width - video_frame_width - 10, 10))  # Top-right corner
+                score = drawSaber(landmarks_px, screen, opponent_landmarks_px, score,
+                                  'left' if position == 'right' else 'right')
+                score = drawSaber(opponent_landmarks_px, screen, landmarks_px, score,
+                                  'left' if opposite_position == 'right' else 'right')
+                draw_score_panel(screen, score['left'], score['right'])
 
-        if frame_index < num_frames:
+            pygame.draw.rect(screen, back_button_color, back_button_rect)
+            screen.blit(back_button_text, (back_button_rect.x + 10, back_button_rect.y + 5))
 
-            frame_landmarks = landmarks[frame_index]
-            # Draw the pre-recorded pose lines, head image, and saber on the left side
-            opponent_landmarks_px = draw_pose_lines(screen, frame_landmarks, head_image, position,
-                                               has_calculated_center, is_realtime=False)
-            frame_index += 1
-            if opponent_landmarks_px is None:
-                continue
-
-            has_calculated_center = True
-
-            # Draw the real-time pose lines, head image, and saber
-            landmarks_px = draw_pose_lines(screen, realtime_landmarks, realtime_head_image, opposite_position,
-                                           False, is_realtime=True)
-            if landmarks_px is None:
-                continue
-            # print(score)
-            # Draw the opponent's saber and check for collisions
-            score = drawSaber(landmarks_px, screen, opponent_landmarks_px, score,
-                              'left' if position == 'right' else 'right')
-            # Draw the saber and check for collisions
-            score = drawSaber(opponent_landmarks_px, screen, landmarks_px, score,
-                              'left' if opposite_position == 'right' else 'right')
-            # Draw the score panel
-            draw_score_panel(screen, score['left'], score['right'])
-        # Draw the back button
-        pygame.draw.rect(screen, back_button_color, back_button_rect)
-        screen.blit(back_button_text, (back_button_rect.x + 10, back_button_rect.y + 5))
-
-        # Update the display
-        pygame.display.flip()
-
-        # Cap the frame rate
-        clock.tick(30)
+            pygame.display.flip()
+            clock.tick(30)
+    finally:
+        cap.release()
+        # print("Camera released")
 
 
 def define_back_button_simulation_screen():
